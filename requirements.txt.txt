@@ -1,7 +1,0 @@
-slack-bolt
-slack-sdk
-pandas
-scikit-learn
-matplotlib
-requests
-numpy
