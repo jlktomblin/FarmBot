@@ -229,10 +229,12 @@ def handle_mineralization(ack, respond, command):
         respond(f"⚠️ *Field Notification:* `{field_name}` does not have an actual planting date recorded yet.")
         return
 
-    df_soil = get_field_soil_data(field_name).copy()
+    df_soil = get_field_soil_data(field_name)
     if df_soil is None:
-        respond(f"❌ Soil layer matrix for `{field_name}` not in memory cache.")
+        respond(f"❌ Soil layer matrix for `{field_name}` not found on disk.")
         return
+    
+    df_soil = df_soil.copy()
         
     station_info = FIELD_STATION_MAP.get(field_name)
     df_wx = fetch_climate_data_cached(station_info[0], datetime.now().year)
@@ -245,11 +247,8 @@ def handle_mineralization(ack, respond, command):
         return
 
     tmean_col = [c for c in sub_wx.columns if 'Mean Temp' in c or 'TMEAN' in c][0]
-    precip_col = [c for c in sub_wx.columns if 'Total Precip' in c or 'Total Rain' in c or 'PRECIP' in c][0]
-    
     sub_wx['Tmean'] = pd.to_numeric(sub_wx[tmean_col], errors='coerce').fillna(12.0)
-    sub_wx['Precip'] = pd.to_numeric(sub_wx[precip_col], errors='coerce').fillna(0.0)
-
+    
     # Calculate GDD for basic kinetic progression
     current_gdd = (sub_wx['Tmean'] - 2.5 - GDD_BASE).clip(lower=0).sum()
 
@@ -275,7 +274,7 @@ def handle_mineralization(ack, respond, command):
     
     plt.figure(figsize=(7, 6))
     sc = plt.scatter(df_soil['Longitude'], df_soil['Latitude'], c=df_soil['Net_N_min_kg_ha'], cmap='YlOrRd', s=8, alpha=0.8)
-    plt.colorbar(sc, label='Net Mineralized N ($kg\ N \cdot ha^{-1}$)')
+    plt.colorbar(sc, label=r'Net Mineralized N ($kg\ N \cdot ha^{-1}$)')
     
     title_suffix = "\n(Topography/LiDAR Integrated)" if topo else ""
     plt.title(f"Field: {field_name} — Net N Mineralization Index{title_suffix}", fontsize=10, fontweight='bold')
