@@ -6,3 +6,7 @@ matplotlib
 requests
 numpy
 flask
+pyarrow
+rasterio
+shapely
+geopandas
