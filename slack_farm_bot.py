@@ -120,7 +120,7 @@ for f in glob.glob(os.path.join(CSV_FOLDER, '*.csv')):
 
 # Load Terrain Metrics
 TERRAIN_METRICS = {}
-terrain_csv = "LiDAR_Field_Metrics/field_terrain_metrics.csv"
+terrain_csv = "field_terrain_metrics.csv"
 if os.path.exists(terrain_csv):
     tm = pd.read_csv(terrain_csv).set_index('Field')
     TERRAIN_METRICS = tm.to_dict('index')
