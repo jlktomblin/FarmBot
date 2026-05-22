@@ -1,0 +1,40 @@
+Field,Pixels_Analyzed,Elevation_Mean_m,Elevation_Min_m,Elevation_Max_m,Elevation_Range_m,Elevation_Std_m,TRI,Drainage_Class,Mineralization_Topo_Modifier
+Bercab 1,2520,178.21,177.43,178.89,1.46,0.294,0.251,Gently rolling — good drainage,0.987
+Bercab 2,4610,178.22,177.35,179.2,1.85,0.298,0.237,Gently rolling — good drainage,0.988
+Burm,5605,176.75,175.72,177.93,2.21,0.202,0.143,Gently rolling — good drainage,0.993
+Sydenham 1,2248,177.93,177.19,178.78,1.59,0.32,0.267,Gently rolling — good drainage,0.987
+Gerrits,2471,221.43,216.85,226.07,9.22,1.918,1.514,Hilly — rapid drainage on slopes,0.924
+Sydenham 2 North,1193,177.45,176.43,178.2,1.76,0.353,0.289,Gently rolling — good drainage,0.986
+Sydenham 2 South,664,177.2,176.79,177.76,0.97,0.175,0.145,Flat — ponding risk,0.993
+FieldAndFlock_1,4978,215.67,212.79,217.57,4.78,0.804,0.644,Rolling — variable drainage,0.968
+FieldAndFlock_2,3444,223.77,220.48,227.22,6.74,1.511,1.286,Hilly — rapid drainage on slopes,0.936
+Kerrington,1395,205.63,205.13,206.27,1.14,0.217,0.179,Gently rolling — good drainage,0.991
+Harrison Farms,2645,307.51,300.67,319.55,18.88,4.381,3.818,Hilly — rapid drainage on slopes,0.809
+JD Peters,2992,221.1,215.96,224.19,8.24,1.753,1.39,Hilly — rapid drainage on slopes,0.93
+Moosberger_1,1019,209.72,207.84,212.01,4.17,0.972,0.832,Rolling — variable drainage,0.958
+Schumhaven,2251,333.12,330.55,336.77,6.21,1.161,0.959,Hilly — rapid drainage on slopes,0.952
+Moosberger_2,1112,210.59,209.38,213.46,4.08,0.658,0.563,Rolling — variable drainage,0.972
+Veldale,2663,267.8,263.78,272.08,8.3,2.375,2.202,Hilly — rapid drainage on slopes,0.89
+Triple Lane Farms,1755,273.17,265.06,277.32,12.26,2.602,2.161,Hilly — rapid drainage on slopes,0.892
+Clare Horst,1592,373.15,364.02,380.87,16.85,5.048,4.622,Hilly — rapid drainage on slopes,0.769
+Leis,2834,357.99,354.24,361.84,7.6,1.82,1.507,Hilly — rapid drainage on slopes,0.925
+Wettlaufer,1618,223.19,218.7,226.83,8.12,1.546,1.277,Hilly — rapid drainage on slopes,0.936
+Renwick 1,1257,331.09,319.11,338.23,19.13,3.994,3.202,Hilly — rapid drainage on slopes,0.84
+Renwick 2,3642,341.18,336.58,347.36,10.78,2.492,2.101,Hilly — rapid drainage on slopes,0.895
+Schaus,2342,292.85,286.28,300.53,14.25,2.606,2.004,Hilly — rapid drainage on slopes,0.9
+Gerber Acres (1),3720,389.95,385.79,400.33,14.54,2.849,2.117,Hilly — rapid drainage on slopes,0.894
+Lang,8264,260.39,242.54,269.91,27.37,4.375,3.339,Hilly — rapid drainage on slopes,0.833
+GerMar Farms (Grubb),2431,325.34,314.6,336.57,21.97,6.85,6.291,Hilly — rapid drainage on slopes,0.7
+Brucelea,2696,232.01,228.86,238.12,9.26,1.6,1.252,Hilly — rapid drainage on slopes,0.937
+Campbell,2133,184.09,183.64,186.01,2.37,0.254,0.189,Gently rolling — good drainage,0.991
+Biermans,5410,254.33,250.14,267.06,16.93,3.355,2.56,Hilly — rapid drainage on slopes,0.872
+Marvara / Judd,2550,423.8,419.95,426.14,6.19,1.465,1.219,Hilly — rapid drainage on slopes,0.939
+Christie-2,1335,236.5,226.03,244.23,18.2,6.446,6.065,Hilly — rapid drainage on slopes,0.7
+Christie-1,2050,223.61,220.54,229.13,8.59,1.459,1.094,Hilly — rapid drainage on slopes,0.945
+Klavan,4678,459.32,456.35,462.56,6.21,1.238,1.027,Hilly — rapid drainage on slopes,0.949
+Triaro,2639,465.65,462.2,468.83,6.63,1.802,1.649,Hilly — rapid drainage on slopes,0.918
+Highland,3995,479.83,476.8,484.04,7.24,1.061,0.793,Hilly — rapid drainage on slopes,0.96
+Wecker,4013,177.0,176.16,177.86,1.7,0.284,0.237,Gently rolling — good drainage,0.988
+Benderbrook 1,1739,329.13,327.56,330.56,3.0,0.674,0.556,Rolling — variable drainage,0.972
+Benderbrook 2,2371,333.97,330.81,338.71,7.9,1.456,1.165,Hilly — rapid drainage on slopes,0.942
+McAlpine,1595,213.54,210.2,215.24,5.04,0.793,0.613,Rolling — variable drainage,0.969
