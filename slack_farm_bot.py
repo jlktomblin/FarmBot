@@ -97,7 +97,7 @@ FIELD_STATION_MAP = {
 }
 
 # ==========================================
-# 2. RUNTIME EXTRACTION & RAM MEMORY CACHE
+# 2. RUNTIME EXTRACTION & LAZY LOADING CACHE
 # ==========================================
 if not os.path.exists("soil_data"):
     os.makedirs("soil_data")
@@ -107,16 +107,16 @@ for zf in glob.glob("*.zip"):
         zip_ref.extractall("soil_data")
     os.remove(zf)
 
-SOIL_CACHE = {}
+# Build a lightweight map of file paths instead of loading all data into RAM
+FILE_MAP = {}
 for f in glob.glob(os.path.join(CSV_FOLDER, '*.csv')):
     base = os.path.basename(f).replace('.csv', '')
     mapped = FIELD_NAME_MAP.get(base, base)
-    df_temp = pd.read_csv(f)
-    df_temp['Field'] = mapped
-    if mapped in SOIL_CACHE:
-        SOIL_CACHE[mapped] = pd.concat([SOIL_CACHE[mapped], df_temp], ignore_index=True)
+    # Handle cases where multiple CSVs map to one field
+    if mapped not in FILE_MAP:
+        FILE_MAP[mapped] = [f]
     else:
-        SOIL_CACHE[mapped] = df_temp
+        FILE_MAP[mapped].append(f)
 
 # Load Terrain Metrics
 TERRAIN_METRICS = {}
@@ -131,35 +131,18 @@ else:
 WEATHER_CACHE = {}
 
 def get_field_soil_data(field_name):
-    return SOIL_CACHE.get(field_name, None)
-
-def fetch_climate_data(station_id, year):
-    url = (f'https://climate.weather.gc.ca/climate_data/bulk_data_e.html'
-           f'?format=csv&stationID={station_id}&Year={year}'
-           f'&Month=1&Day=1&timeframe=2&submit=Download+Data')
-    try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        df = pd.read_csv(io.StringIO(r.text))
-        df.columns = df.columns.str.strip()
-        date_col = [c for c in df.columns if 'Date' in c or 'date' in c][0]
-        df['Date'] = pd.to_datetime(df[date_col], errors='coerce')
-        return df.dropna(subset=['Date'])
-    except Exception as e:
+    """Lazy-loads the soil data from disk only when requested to save RAM."""
+    file_paths = FILE_MAP.get(field_name)
+    if not file_paths:
         return None
-
-def fetch_climate_data_cached(station_id, year):
-    cache_key = f"{station_id}_{year}"
-    now = datetime.now()
-    if cache_key in WEATHER_CACHE:
-        if (now - WEATHER_CACHE[cache_key]['fetched_at']).total_seconds() / 3600 < 6:
-            return WEATHER_CACHE[cache_key]['data']
-    data = fetch_climate_data(station_id, year)
-    if data is not None:
-        WEATHER_CACHE[cache_key] = {'data': data, 'fetched_at': now}
-    return data
-
-app = App(token=SLACK_BOT_TOKEN)
+    
+    dfs = []
+    for fp in file_paths:
+        df_temp = pd.read_csv(fp)
+        df_temp['Field'] = field_name
+        dfs.append(df_temp)
+    
+    return pd.concat(dfs, ignore_index=True) if dfs else None
 
 # ==========================================
 # 3. INTERACTIVE SLACK ROUTINES
