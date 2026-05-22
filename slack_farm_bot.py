@@ -144,6 +144,7 @@ def get_field_soil_data(field_name):
     
     return pd.concat(dfs, ignore_index=True) if dfs else None
 
+app = App(token=SLACK_BOT_TOKEN)
 # ==========================================
 # 3. INTERACTIVE SLACK ROUTINES
 # ==========================================
