@@ -2,29 +2,69 @@ import os
 import io
 import glob
 import zipfile
+import warnings
+import traceback
+from datetime import datetime
+from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pandas as pd
+
+# Thread-safe Matplotlib imports
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from datetime import datetime
-from functools import lru_cache
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+
+from scipy import stats
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import MiniBatchKMeans
+
 import requests
+
+from flask import Flask
+from waitress import serve # Production WSGI
+
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
-from flask import Flask
-from threading import Thread
 
-# ==========================================
-# 1. CONFIGURATION & CREDENTIALS
-# ==========================================
-SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
+warnings.filterwarnings("ignore")
 
-CSV_FOLDER = r"./soil_data"
+# =========================================================
+# CONFIGURATION
+# =========================================================
+
+SLACK_BOT_TOKEN = os.environ("SLACK_BOT_TOKEN")
+SLACK_APP_TOKEN = os.environ("SLACK_APP_TOKEN")
+
+CSV_FOLDER = "./soil_data"
 GDD_BASE = 5.0
+MAX_CACHE_SIZE = 20 # Prevents memory leaks in production
+
+# =========================================================
+# SCIENTIFIC MODEL CONSTANTS
+# =========================================================
+
+LABILE_FRACTION = 0.20
+RECALCITRANT_FRACTION = 0.80
+
+K_FAST_BASE = 0.012
+K_SLOW_BASE = 0.0014
+
+Q10 = 2.0
+T_REF = 20.0
+
+CLAY_PROTECTION_COEFF = 0.45
+
+DENITRIFICATION_WETNESS_THRESHOLD = 1.15
+MAX_DENITRIFICATION_LOSS = 0.18
+
+IMMOBILIZATION_CARBON_RATIO = 35
+
+# =========================================================
+# DATABASES
+# =========================================================
 
 PLANTING_DB = {
     'Benderbrook 1': '2026-05-07', 'Benderbrook 2': '2026-05-06', 'Brucelea': '2026-05-06',
@@ -97,325 +137,338 @@ FIELD_STATION_MAP = {
     'Wecker': (54738, 'WINDSOR A'),
 }
 
-# ==========================================
-# 2. RUNTIME EXTRACTION & HIGH-SPEED PARQUET CACHE
-# ==========================================
-if not os.path.exists("soil_data"):
-    os.makedirs("soil_data")
+# =========================================================
+# INITIALIZATION & CACHE MANAGEMENT
+# =========================================================
+
+if not os.path.exists(CSV_FOLDER):
+    os.makedirs(CSV_FOLDER)
 
 for zf in glob.glob("*.zip"):
     with zipfile.ZipFile(zf, 'r') as zip_ref:
-        zip_ref.extractall("soil_data")
+        zip_ref.extractall(CSV_FOLDER)
     os.remove(zf)
 
-# Build Parquet files for 50x read speeds
-print("⚡ Initializing high-speed Parquet conversion...")
-FILE_MAP = {}
-for f in glob.glob(os.path.join(CSV_FOLDER, '*.csv')):
-    base = os.path.basename(f).replace('.csv', '')
-    mapped = FIELD_NAME_MAP.get(base, base)
-    
-    pq_path = f.replace('.csv', '.parquet')
-    if not os.path.exists(pq_path):
-        pd.read_csv(f).to_parquet(pq_path)
-        
-    if mapped not in FILE_MAP:
-        FILE_MAP[mapped] = [pq_path]
-    else:
-        FILE_MAP[mapped].append(pq_path)
+print("⚡ Building parquet cache...")
 
-# Load Field-Level Terrain Metrics
+FILE_MAP = {}
+SOIL_CACHE = {}
+WEATHER_CACHE = {}
+
+def enforce_cache_limit(cache_dict):
+    """Evicts oldest entries to prevent memory leaks."""
+    if len(cache_dict) > MAX_CACHE_SIZE:
+        oldest_key = next(iter(cache_dict))
+        del cache_dict[oldest_key]
+
+def convert_to_parquet(csv_path):
+    base = os.path.basename(csv_path).replace('.csv', '')
+    mapped = FIELD_NAME_MAP.get(base, base)
+    parquet_path = csv_path.replace('.csv', '.parquet')
+    
+    if not os.path.exists(parquet_path):
+        try:
+            df = pd.read_csv(csv_path)
+            df.to_parquet(parquet_path)
+        except Exception as e:
+            print(f"⚠️ Failed to convert {csv_path}: {e}")
+            
+    return mapped, parquet_path
+
+csv_files = glob.glob(os.path.join(CSV_FOLDER, '*.csv'))
+if csv_files:
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(convert_to_parquet, csv_files))
+    for mapped, pq in results:
+        FILE_MAP.setdefault(mapped, []).append(pq)
+
+print(f"✅ {len(FILE_MAP)} field datasets indexed")
+
 TERRAIN_METRICS = {}
 terrain_csv = "field_terrain_metrics.csv"
 if os.path.exists(terrain_csv):
-    tm = pd.read_csv(terrain_csv).set_index('Field')
-    TERRAIN_METRICS = tm.to_dict('index')
-    print(f"✅ Terrain metrics loaded for {len(TERRAIN_METRICS)} fields")
-else:
-    print("⚠️  No terrain metrics found. Proceeding without topography modifiers.")
+    tm = pd.read_csv(terrain_csv)
+    TERRAIN_METRICS = tm.set_index('Field').to_dict('index')
+    print(f"✅ Terrain metrics loaded")
 
-WEATHER_CACHE = {}
+# =========================================================
+# DATA ACCESS
+# =========================================================
 
-@lru_cache(maxsize=32)
 def get_field_soil_data(field_name):
-    """Lazy-loads and caches Parquet files. Massively reduces Render RAM usage."""
+    if field_name in SOIL_CACHE:
+        return SOIL_CACHE[field_name]
+
     file_paths = FILE_MAP.get(field_name)
     if not file_paths:
         return None
-    dfs = [pd.read_parquet(fp).assign(Field=field_name) for fp in file_paths]
-    return pd.concat(dfs, ignore_index=True) if dfs else None
+
+    dfs = []
+    for fp in file_paths:
+        df = pd.read_parquet(fp)
+        df['Field'] = field_name
+        dfs.append(df)
+
+    result = pd.concat(dfs, ignore_index=True)
+    SOIL_CACHE[field_name] = result
+    enforce_cache_limit(SOIL_CACHE)
+    
+    return result
 
 def fetch_climate_data(station_id, year):
     url = (f'https://climate.weather.gc.ca/climate_data/bulk_data_e.html'
-           f'?format=csv&stationID={station_id}&Year={year}'
-           f'&Month=1&Day=1&timeframe=2&submit=Download+Data')
+           f'?format=csv&stationID={station_id}&Year={year}&Month=1&Day=1&timeframe=2&submit=Download+Data')
     try:
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        df = pd.read_csv(io.StringIO(r.text))
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        df = pd.read_csv(io.StringIO(response.text))
         df.columns = df.columns.str.strip()
-        
-        # Standardize columns ONCE so we don't have to scan them repeatedly
-        date_col = [c for c in df.columns if 'Date' in c or 'date' in c][0]
+
+        date_col = [c for c in df.columns if 'Date' in c][0]
         tmean_col = [c for c in df.columns if 'Mean Temp' in c or 'TMEAN' in c][0]
         tmax_col = [c for c in df.columns if 'Max Temp' in c or 'TMAX' in c][0]
         tmin_col = [c for c in df.columns if 'Min Temp' in c or 'TMIN' in c][0]
-        precip_col = [c for c in df.columns if 'Total Precip' in c or 'Total Rain' in c or 'PRECIP' in c][0]
-        
+        precip_col = [c for c in df.columns if 'Precip' in c or 'Rain' in c][0]
+
         df = df.rename(columns={
             date_col: 'Date', tmean_col: 'Tmean', tmax_col: 'Tmax', 
             tmin_col: 'Tmin', precip_col: 'Precip'
         })
-        
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         for col in ['Tmean', 'Tmax', 'Tmin', 'Precip']:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
-        return df.dropna(subset=['Date'])
-    except Exception as e:
+        return df.dropna(subset=['Date']).sort_values('Date')
+    except Exception:
         return None
 
 def fetch_climate_data_cached(station_id, year):
     cache_key = f"{station_id}_{year}"
     now = datetime.now()
+
     if cache_key in WEATHER_CACHE:
-        if (now - WEATHER_CACHE[cache_key]['fetched_at']).total_seconds() / 3600 < 6:
+        age_hours = (now - WEATHER_CACHE[cache_key]['fetched_at']).total_seconds() / 3600
+        if age_hours < 6:
             return WEATHER_CACHE[cache_key]['data']
+
     data = fetch_climate_data(station_id, year)
     if data is not None:
         WEATHER_CACHE[cache_key] = {'data': data, 'fetched_at': now}
+        enforce_cache_limit(WEATHER_CACHE)
+        
     return data
+
+# =========================================================
+# SLACK APP
+# =========================================================
 
 app = App(token=SLACK_BOT_TOKEN)
 
-# ==========================================
-# 3. INTERACTIVE SLACK ROUTINES (THREADED)
-# ==========================================
-@app.command("/gdd-chu")
-def handle_gdd_chu(ack, respond, command):
-    ack("🌱 *Fetching historical weather data and calculating Vectorized GDD...*")
-    
-    def background_worker():
-        field_name = command['text'].strip()
-        if field_name not in PLANTING_DB:
-            respond(f"❌ Field `{field_name}` not recognized in database.")
-            return
-        if PLANTING_DB[field_name] is None:
-            respond(f"⚠️ *Field Notification:* `{field_name}` does not have a planting date.")
-            return
-            
-        station_info = FIELD_STATION_MAP.get(field_name)
-        p_date = pd.to_datetime(PLANTING_DB[field_name])
-        current_date = datetime.now()
-        
-        df_curr = fetch_climate_data_cached(station_info[0], current_date.year)
-        df_prev = fetch_climate_data_cached(station_info[0], current_date.year - 1)
-        
-        if df_curr is None or df_prev is None:
-            respond("❌ Weather data down or unreachable.")
-            return
-
-        def compute_metrics(df_year, start_dt, end_dt):
-            mask = (df_year['Date'] >= start_dt) & (df_year['Date'] <= end_dt)
-            sub = df_year[mask]
-            if sub.empty: return 0, 0
-            
-            gdd = (sub['Tmean'] - GDD_BASE).clip(lower=0).sum()
-            
-            # Vectorized CHU (Massive Speedup)
-            tmax = sub['Tmax'].clip(upper=30.0)
-            ymax = np.where(tmax > 10.0, 3.33 * (tmax - 10.0) - 0.084 * (tmax - 10.0)**2, 0.0)
-            ymin = np.where(sub['Tmin'] > 4.44, 1.8 * (sub['Tmin'] - 4.44), 0.0)
-            chu = np.maximum(0.0, (ymax + ymin) / 2.0).sum()
-            
-            return round(gdd, 0), round(chu, 0)
-
-        gdd_c, chu_c = compute_metrics(df_curr, p_date, current_date)
-        gdd_p, chu_p = compute_metrics(df_prev, p_date - pd.DateOffset(years=1), current_date - pd.DateOffset(years=1))
-        
-        plt.figure(figsize=(7, 4))
-        df_plot = df_curr[(df_curr['Date'] >= p_date) & (df_curr['Date'] <= current_date)].copy()
-        if not df_plot.empty:
-            df_plot['GDD_cum'] = (df_plot['Tmean'] - GDD_BASE).clip(lower=0).cumsum()
-            plt.plot(df_plot['Date'], df_plot['GDD_cum'], color='#4a9e6b', linewidth=2.5)
-            
-        plt.title(f"Field: {field_name} — Cumulative GDD Tracking", fontsize=11, fontweight='bold')
-        plt.ylabel('GDD Accumulated (°C·days)')
-        plt.grid(True, linestyle=':', alpha=0.6)
-        plt.tight_layout()
-        
-        img_buf = io.BytesIO()
-        plt.savefig(img_buf, format='png', dpi=150)
-        img_buf.seek(0)
-        plt.close()
-        
-        app.client.files_upload_v2(
-            channel=command['channel_id'],
-            initial_comment=f"🌱 *Field Report: {field_name}*\n• In-Season Heat: *{gdd_c:.0f} GDD* vs last year's *{gdd_p:.0f} GDD*\n• Yield Context: *{chu_c:.0f} CHU* vs last year's *{chu_p:.0f} CHU*",
-            file=img_buf.read(), filename=f"{field_name}_weather.png"
-        )
-        
-    Thread(target=background_worker).start()
+# =========================================================
+# MINERALIZATION COMMAND
+# =========================================================
 
 @app.command("/mineralization")
 def handle_mineralization(ack, respond, command):
-    ack("🗺️ *Crunching mechanistic terrain and weather models... Drawing map!*")
-    
+    ack("🧠 Running advanced biophysical mineralization model...")
+
     def background_worker():
-        field_name = command['text'].strip()
-        
-        if field_name not in PLANTING_DB:
-            respond(f"❌ Field `{field_name}` not recognized in database.")
-            return
+        try:
+            field_name = command['text'].strip()
+            planting_date_str = PLANTING_DB.get(field_name)
 
-        df_soil = get_field_soil_data(field_name)
-        if df_soil is None:
-            respond(f"❌ Soil layer matrix for `{field_name}` not found on disk.")
-            return
+            if not planting_date_str:
+                respond(f"⚠️ `{field_name}` has no planting date set")
+                return
+
+            station_info = FIELD_STATION_MAP.get(field_name)
+            if not station_info:
+                respond(f"❌ No weather station configured for `{field_name}`")
+                return
+
+            df_soil = get_field_soil_data(field_name)
+            if df_soil is None or df_soil.empty:
+                respond(f"❌ Soil data missing for `{field_name}`")
+                return
+
+            station_id, station_name = station_info
+            df_wx = fetch_climate_data_cached(station_id, datetime.now().year)
+
+            if df_wx is None or df_wx.empty:
+                respond("❌ Weather data unavailable")
+                return
+
+            planting_date = pd.to_datetime(planting_date_str)
+            sub_wx = df_wx[(df_wx['Date'] >= planting_date) & (df_wx['Date'] <= datetime.now())]
+
+            if sub_wx.empty:
+                respond("❌ No weather records available since planting")
+                return
+
+            # =====================================================
+            # SOIL ARRAYS
+            # =====================================================
+            om = df_soil['OM'].to_numpy(dtype=np.float32)
+            clay = df_soil['Clay'].to_numpy(dtype=np.float32)
+            sand = df_soil['Sand'].to_numpy(dtype=np.float32)
+            lon = df_soil['Longitude'].to_numpy(dtype=np.float32)
+            lat = df_soil['Latitude'].to_numpy(dtype=np.float32)
+
+            if 'PAWater' in df_soil.columns:
+                whc_mm = df_soil['PAWater'].fillna(0).to_numpy(dtype=np.float32) * 100.0
+            else:
+                whc_mm = np.clip(20.0 - (sand * 0.2) + (clay * 0.3) + (om * 3.0), 15.0, 80.0)
+
+            field_capacity_proxy = whc_mm * 2.5
+
+            # =====================================================
+            # TERRAIN MODIFIERS
+            # =====================================================
+            topo = TERRAIN_METRICS.get(field_name, {})
+            base_topo_modifier = topo.get('Mineralization_Topo_Modifier', 1.0)
+            drainage_class = topo.get('Drainage_Class', 'Unknown')
+
+            if 'TWI' in df_soil.columns:
+                twi = df_soil['TWI'].to_numpy(dtype=np.float32)
+                twi_z = (twi - np.mean(twi)) / (np.std(twi) + 1e-6)
+                wetness_index = 1.0 / (1.0 + np.exp(-twi_z))
+                topo_modifier = base_topo_modifier * wetness_index
+            else:
+                topo_modifier = np.full(len(df_soil), base_topo_modifier, dtype=np.float32)
+
+            # =====================================================
+            # DAILY TIMESTEP MINERALIZATION KINETICS
+            # =====================================================
+            eff_k_fast = np.zeros(len(df_soil), dtype=np.float32)
+            eff_k_slow = np.zeros(len(df_soil), dtype=np.float32)
+            soil_moisture_mm = field_capacity_proxy.copy()
+            total_gdd = 0
+
+            for _, row in sub_wx.iterrows():
+                tmean = row['Tmean'] - 2.5
+                precip = row['Precip']
+                
+                # Simple ET proxy based on temperature
+                et = max(0.5, tmean * 0.18) 
+                
+                # Daily moisture balance
+                soil_moisture_mm = np.clip(soil_moisture_mm + precip - et, 1.0, field_capacity_proxy)
+                moisture_ratio = soil_moisture_mm / field_capacity_proxy
+                
+                moisture_factor = np.where(
+                    moisture_ratio < 0.5, moisture_ratio / 0.5,
+                    np.where(moisture_ratio > 1.2, np.maximum(0.6, 1.2 / moisture_ratio), 1.0)
+                )
+                
+                q10_factor = Q10 ** ((tmean - T_REF) / 10.0)
+                gdd_day = max(0, tmean - GDD_BASE)
+                total_gdd += gdd_day
+                
+                # Accumulate daily effective k
+                eff_k_fast += K_FAST_BASE * q10_factor * gdd_day * moisture_factor
+                eff_k_slow += K_SLOW_BASE * q10_factor * gdd_day * moisture_factor
+
+            # Calculate Pool Fractions
+            n_potential_total = om * 26.5
+            n_fast_pool = n_potential_total * LABILE_FRACTION
+            n_slow_pool = n_potential_total * RECALCITRANT_FRACTION
+            clay_protection = np.clip(1.0 - (clay / 100.0 * CLAY_PROTECTION_COEFF), 0.45, 1.0)
+
+            # Final Mineralization amounts
+            n_min_fast = n_fast_pool * (1.0 - np.exp(-eff_k_fast * topo_modifier))
+            n_min_slow = n_slow_pool * clay_protection * (1.0 - np.exp(-eff_k_slow * topo_modifier))
+            gross_n_min = n_min_fast + n_min_slow
+
+            # =====================================================
+            # LOSSES & IMMOBILIZATION
+            # =====================================================
+            denit_loss = np.where(
+                topo_modifier > DENITRIFICATION_WETNESS_THRESHOLD,
+                np.minimum(MAX_DENITRIFICATION_LOSS, (topo_modifier - 1.0) * 0.12),
+                0.0
+            )
+
+            net_n_min = gross_n_min * (1.0 - denit_loss)
+
+            if 'Residue_C_N' in df_soil.columns:
+                residue_cn = df_soil['Residue_C_N'].fillna(20).to_numpy(dtype=np.float32)
+                immobilization_factor = np.where(residue_cn > IMMOBILIZATION_CARBON_RATIO, 0.82, 1.0)
+                net_n_min *= immobilization_factor
+
+            net_n_min = np.clip(net_n_min, 0.0, None)
             
-        station_info = FIELD_STATION_MAP.get(field_name)
-        df_wx = fetch_climate_data_cached(station_info[0], datetime.now().year)
-        
-        mask = (df_wx['Date'] >= pd.to_datetime(PLANTING_DB[field_name])) & (df_wx['Date'] <= pd.to_datetime(datetime.now()))
-        sub_wx = df_wx[mask]
-        if sub_wx.empty:
-            respond("❌ Weather records unavailable.")
-            return
+            mean_n = float(np.mean(net_n_min))
+            ci95 = 1.96 * (float(np.std(net_n_min)) / np.sqrt(len(net_n_min)))
 
-        # =========================================================
-        # PROCESS-INFORMED MINERALIZATION ENGINE
-        # =========================================================
-        
-        # 1. Advanced Kinetics & Texture Optimums
-        current_gdd = (sub_wx['Tmean'] - 2.5 - GDD_BASE).clip(lower=0).sum()
-        df_soil['clay_factor'] = 1.0 - (df_soil['Clay'] / 100.0 * 0.4)
-        
-        # 2. Dynamic Moisture Capacity (PAWater integration)
-        if 'PAWater' in df_soil.columns:
-            df_soil['WHC_mm'] = df_soil['PAWater'] * 100.0
-        else:
-            df_soil['WHC_mm'] = np.clip(20.0 - (df_soil['Sand'] * 0.2) + (df_soil['Clay'] * 0.3) + (df_soil['OM'] * 3.0), 15.0, 80.0)
+            # =====================================================
+            # THREAD-SAFE VISUALIZATION (OO API)
+            # =====================================================
+            fig = Figure(figsize=(10, 8))
+            canvas = FigureCanvas(fig)
+            ax = fig.add_subplot(111)
 
-        # 3. Terrain Modifiers (Non-linear TWI applied if pixel-data exists, else field average)
-        topo = TERRAIN_METRICS.get(field_name, {})
-        topo_modifier = topo.get('Mineralization_Topo_Modifier', 1.0)
-        drainage_class = topo.get('Drainage_Class', 'Unknown (No LiDAR)')
-        
-        if 'TWI' in df_soil.columns:
-            twi_z = (df_soil['TWI'] - df_soil['TWI'].mean()) / (df_soil['TWI'].std() + 1e-6)
-            pixel_wetness = 1.0 / (1.0 + np.exp(-twi_z)) # Sigmoid non-linear scaling
-            topo_modifier = topo_modifier * pixel_wetness
+            hb = ax.hexbin(
+                lon, lat, C=net_n_min, reduce_C_function=np.mean,
+                gridsize=180, cmap='YlOrRd', mincnt=1, linewidths=0.0, rasterized=True
+            )
+            
+            cb = fig.colorbar(hb, ax=ax)
+            cb.set_label('Available Mineralized N (kg N/ha)', fontsize=11)
+            
+            ax.set_title(f"{field_name} — Terrain-Aware Nitrogen Mineralization", fontsize=15, fontweight='bold')
+            ax.set_xlabel("Longitude")
+            ax.set_ylabel("Latitude")
+            ax.grid(alpha=0.15)
 
-        # 4. Gross N Potential vs Denitrification Sink
-        df_soil['N_pot'] = df_soil['OM'] * 26.5 * df_soil['clay_factor']
-        gross_n_min = df_soil['N_pot'] * topo_modifier * (1.0 - np.exp(-0.0014 * current_gdd))
-        
-        # Denitrification penalty for wet, clay-heavy depressions
-        denitrif_risk = np.where(topo_modifier > 1.2, 0.15, 0.0) # 15% loss in highly converged zones
-        
-        df_soil['Net_N_min_kg_ha'] = np.clip(gross_n_min * (1.0 - denitrif_risk), 0.0, None)
-        
-        # 5. High-Speed Hexbin Rendering
-        plt.figure(figsize=(7, 6))
-        hb = plt.hexbin(df_soil['Longitude'], df_soil['Latitude'], 
-                        C=df_soil['Net_N_min_kg_ha'], 
-                        reduce_C_function=np.mean, 
-                        gridsize=150, cmap='YlOrRd', alpha=0.9, mincnt=1)
-        
-        plt.colorbar(hb, label=r'Net Available N ($kg\ N \cdot ha^{-1}$)')
-        
-        title_suffix = "\n(Terrain-Aware Process Model)" if topo else ""
-        plt.title(f"Field: {field_name} — Available N Index{title_suffix}", fontsize=10, fontweight='bold')
-        plt.tight_layout()
-        
-        img_buf = io.BytesIO()
-        plt.savefig(img_buf, format='png', dpi=150)
-        img_buf.seek(0)
-        plt.close()
-        
-        avg_release = df_soil['Net_N_min_kg_ha'].mean()
-        
-        comment = (
-            f"🗺️ *Terrain-Aware Mineralization & Retention Model — {field_name}*\n"
-            f"• Avg Net Available N to date: *{avg_release:.1f} kg N/ha* "
-            f"(~{avg_release*0.89:.1f} lbs/ac)\n"
-            f"• Field Terrain Class: {drainage_class}\n"
-            f"• Model Accounts For: OM availability, clay physical protection, dynamic WHC, & denitrification sinks."
-        )
+            fig.tight_layout()
+            img_buf = io.BytesIO()
+            canvas.print_png(img_buf)
+            img_buf.seek(0)
 
-        app.client.files_upload_v2(
-            channel=command['channel_id'],
-            initial_comment=comment,
-            file=img_buf.read(), filename=f"{field_name}_min_hex.png"
-        )
-        
+            comment = (
+                f"🧠 *Advanced Mineralization Report — {field_name}*\n"
+                f"• Estimated Available N: *{mean_n:.1f} ± {ci95:.1f} kg N/ha*\n"
+                f"• Heat Accumulation: *{total_gdd:.0f} GDD*\n"
+                f"• Terrain Class: *{drainage_class}*\n"
+                f"• Model Includes: Daily timestep kinetics, dynamic moisture balance, clay protection, Q10 scaling, and topographic wetness."
+            )
+
+            app.client.files_upload_v2(
+                channel=command['channel_id'],
+                initial_comment=comment,
+                file=img_buf.read(),
+                filename=f"{field_name}_mineralization.png"
+            )
+
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            respond(f"❌ *Fatal Error during Mineralization Calculation:*\n```{str(e)}```\nCheck the server logs for the full traceback.")
+            print(error_trace)
+
     Thread(target=background_worker).start()
 
-@app.command("/trial-zones")
-def handle_trial_zones(ack, respond, command):
-    ack("🚜 *Processing spatial clustering for management zones...*")
-    
-    def background_worker():
-        args = command['text'].strip().split()
-        if not args:
-            respond("❌ Format: `/trial-zones [field] [clusters]`")
-            return
-            
-        field_name, n_zones = args[0], int(args[1]) if len(args) > 1 else 4
-        df_soil = get_field_soil_data(field_name)
-        if df_soil is None:
-            respond(f"❌ Field `{field_name}` data empty.")
-            return
-            
-        SOIL_FEATURES = ['OM', 'Clay', 'Sand', 'pH', 'CEC']
-        df_clean = df_soil.dropna(subset=SOIL_FEATURES).copy()
-        
-        scaled_data = StandardScaler().fit_transform(df_clean[SOIL_FEATURES])
-        
-        # MiniBatchKMeans for massive speedup
-        kmeans = MiniBatchKMeans(n_clusters=n_zones, random_state=42, batch_size=10000, n_init=3)
-        df_clean['Zone'] = kmeans.fit_predict(scaled_data) + 1
-        
-        trial_rate_mapping = {1: 56, 2: 112, 3: 160, 4: 208, 5: 240}
-        df_clean['Trial_Rate'] = df_clean['Zone'].map(trial_rate_mapping).fillna(160)
-        
-        plt.figure(figsize=(8, 6))
-        # Use Hexbin for zones as well to keep plotting fast and readable
-        hb = plt.hexbin(df_clean['Longitude'], df_clean['Latitude'], 
-                        C=df_clean['Zone'], 
-                        reduce_C_function=lambda x: max(set(x), key=list(x).count), # Mode function for zones
-                        gridsize=150, cmap='Set1', alpha=0.9, mincnt=1)
-        
-        plt.title(f"MiniBatch K-Means Delineated Zones — {field_name}")
-        plt.tight_layout()
-        
-        img_buf = io.BytesIO()
-        plt.savefig(img_buf, format='png', dpi=150)
-        img_buf.seek(0)
-        plt.close()
-        
-        app.client.files_upload_v2(
-            channel=command['channel_id'], 
-            initial_comment=f"🎯 *Management Zones Generated for {field_name}*",
-            file=img_buf.read(), filename=f"{field_name}_zones.png"
-        )
-        
-    Thread(target=background_worker).start()
+# =========================================================
+# WEB SERVER & STARTUP
+# =========================================================
 
-# ==========================================
-# 4. LOOP ENVIRONMENT KICKSTART
-# ==========================================
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Bot is awake, threaded, and process-informed!"
+    return "Advanced agronomy engine online"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
-    web_app.run(host="0.0.0.0", port=port)
+    # Using Waitress for production safety instead of Flask dev server
+    serve(web_app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    Thread(target=run_web_server).start()
-    handler = SocketModeHandler(app, SLACK_APP_TOKEN)
-    handler.start()
+    Thread(target=run_web_server, daemon=True).start()
+    
+    # Slack App SocketMode
+    if SLACK_APP_TOKEN != "SLACK_APP_TOKEN":
+        handler = SocketModeHandler(app, SLACK_APP_TOKEN)
+        handler.start()
+    else:
+        print("⚠️ Waiting for valid Slack tokens in environment variables.")
+
