@@ -35,8 +35,8 @@ warnings.filterwarnings("ignore")
 # CONFIGURATION
 # =========================================================
 
-SLACK_BOT_TOKEN = os.environ("SLACK_BOT_TOKEN")
-SLACK_APP_TOKEN = os.environ("SLACK_APP_TOKEN")
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
+SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
 
 CSV_FOLDER = "./soil_data"
 GDD_BASE = 5.0
@@ -448,27 +448,27 @@ def handle_mineralization(ack, respond, command):
     Thread(target=background_worker).start()
 
 # =========================================================
-# WEB SERVER & STARTUP
+# WEB SERVER & STARTUP (RENDER SURVIVAL HACK)
 # =========================================================
 
-web_app = Flask(__name__)
+# This dummy server only exists to satisfy Render's port requirement
+dummy_app = Flask(__name__)
 
-@web_app.route('/')
+@dummy_app.route('/')
 def home():
-    return "Advanced agronomy engine online"
-
-def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
-    # Using Waitress for production safety instead of Flask dev server
-    serve(web_app, host="0.0.0.0", port=port)
+    return "Bot is running silently in the background!"
 
 if __name__ == "__main__":
-    Thread(target=run_web_server, daemon=True).start()
-    
-    # Slack App SocketMode
-    if SLACK_APP_TOKEN != "SLACK_APP_TOKEN":
+    # 1. Start the Slack Bot in a background thread
+    if SLACK_APP_TOKEN and SLACK_BOT_TOKEN:
+        print("✅ Slack tokens found. Starting bot...")
         handler = SocketModeHandler(app, SLACK_APP_TOKEN)
-        handler.start()
+        Thread(target=handler.start, daemon=True).start()
     else:
-        print("⚠️ Waiting for valid Slack tokens in environment variables.")
+        print("⚠️ Missing Slack tokens. Bot cannot start.")
+
+    # 2. Run the dummy server on the MAIN thread to prevent Render from killing the app
+    port = int(os.environ.get("PORT", 8080))
+    print(f"✅ Opening port {port} for Render...")
+    serve(dummy_app, host="0.0.0.0", port=port)
 
