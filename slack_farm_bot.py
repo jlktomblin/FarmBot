@@ -267,16 +267,6 @@ app = App(token=SLACK_BOT_TOKEN)
 # COMMAND HANDLERS
 # =========================================================
 
-@app.command("/gdd-chu")
-def handle_gdd_chu(ack, respond, command):
-    """Placeholder to catch Slack's timeout while module is being built"""
-    ack("🌡️ Acknowledged! /gdd-chu logic is currently under construction. Check back later.")
-
-@app.command("/trial-zones")
-def handle_trial_zones(ack, respond, command):
-    """Placeholder to catch Slack's timeout while module is being built"""
-    ack("🎯 Acknowledged! /trial-zones logic is currently under construction. Check back later.")
-
 @app.command("/mineralization")
 def handle_mineralization(ack, respond, command):
     ack("🧠 Running advanced biophysical mineralization model...")
