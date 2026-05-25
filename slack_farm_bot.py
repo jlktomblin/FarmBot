@@ -451,7 +451,6 @@ def handle_mineralization(ack, respond, command):
 # WEB SERVER & STARTUP (RENDER SURVIVAL HACK)
 # =========================================================
 
-# This dummy server only exists to satisfy Render's port requirement
 dummy_app = Flask(__name__)
 
 @dummy_app.route('/')
@@ -459,11 +458,12 @@ def home():
     return "Bot is running silently in the background!"
 
 if __name__ == "__main__":
-    # 1. Start the Slack Bot in a background thread
+    # 1. Start the Slack Bot safely (Non-blocking)
     if SLACK_APP_TOKEN and SLACK_BOT_TOKEN:
-        print("✅ Slack tokens found. Starting bot...")
+        print("✅ Slack tokens found. Connecting bot...")
         handler = SocketModeHandler(app, SLACK_APP_TOKEN)
-        Thread(target=handler.start, daemon=True).start()
+        # Use .connect() instead of .start() to avoid the thread crash!
+        handler.connect() 
     else:
         print("⚠️ Missing Slack tokens. Bot cannot start.")
 
