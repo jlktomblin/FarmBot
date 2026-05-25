@@ -24,7 +24,6 @@ from sklearn.cluster import MiniBatchKMeans
 import requests
 
 from flask import Flask
-from waitress import serve # Production WSGI
 
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -40,7 +39,7 @@ SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
 
 CSV_FOLDER = "./soil_data"
 GDD_BASE = 5.0
-MAX_CACHE_SIZE = 10 # Prevents memory leaks in production
+MAX_CACHE_SIZE = 38 # Caches all fields (Monitor Render RAM usage!)
 
 # =========================================================
 # SCIENTIFIC MODEL CONSTANTS
@@ -189,7 +188,7 @@ terrain_csv = "field_terrain_metrics.csv"
 if os.path.exists(terrain_csv):
     tm = pd.read_csv(terrain_csv)
     TERRAIN_METRICS = tm.set_index('Field').to_dict('index')
-    print(f"✅ Terrain metrics loaded")
+    print("✅ Terrain metrics loaded")
 
 # =========================================================
 # DATA ACCESS
@@ -265,8 +264,18 @@ def fetch_climate_data_cached(station_id, year):
 app = App(token=SLACK_BOT_TOKEN)
 
 # =========================================================
-# MINERALIZATION COMMAND
+# COMMAND HANDLERS
 # =========================================================
+
+@app.command("/gdd-chu")
+def handle_gdd_chu(ack, respond, command):
+    """Placeholder to catch Slack's timeout while module is being built"""
+    ack("🌡️ Acknowledged! /gdd-chu logic is currently under construction. Check back later.")
+
+@app.command("/trial-zones")
+def handle_trial_zones(ack, respond, command):
+    """Placeholder to catch Slack's timeout while module is being built"""
+    ack("🎯 Acknowledged! /trial-zones logic is currently under construction. Check back later.")
 
 @app.command("/mineralization")
 def handle_mineralization(ack, respond, command):
@@ -337,44 +346,49 @@ def handle_mineralization(ack, respond, command):
                 topo_modifier = np.full(len(df_soil), base_topo_modifier, dtype=np.float32)
 
             # =====================================================
-            # DAILY TIMESTEP MINERALIZATION KINETICS
+            # HIGH-PERFORMANCE VECTORIZED KINETICS
             # =====================================================
-            eff_k_fast = np.zeros(len(df_soil), dtype=np.float32)
-            eff_k_slow = np.zeros(len(df_soil), dtype=np.float32)
+            # Pre-compute soil temp adjusted means
+            tmean_arr = (sub_wx['Tmean'].to_numpy(dtype=np.float32) - 2.5)
+            precip_arr = sub_wx['Precip'].to_numpy(dtype=np.float32)
+            et_arr = np.maximum(0.5, tmean_arr * 0.18)
+
+            n_days = len(sub_wx)
             soil_moisture_mm = field_capacity_proxy.copy()
-            total_gdd = 0
 
-            for _, row in sub_wx.iterrows():
-                tmean = row['Tmean'] - 2.5
-                precip = row['Precip']
-                
-                # Simple ET proxy based on temperature
-                et = max(0.5, tmean * 0.18) 
-                
-                # Daily moisture balance
-                soil_moisture_mm = np.clip(soil_moisture_mm + precip - et, 1.0, field_capacity_proxy)
-                moisture_ratio = soil_moisture_mm / field_capacity_proxy
-                
-                moisture_factor = np.where(
-                    moisture_ratio < 0.5, moisture_ratio / 0.5,
-                    np.where(moisture_ratio > 1.2, np.maximum(0.6, 1.2 / moisture_ratio), 1.0)
-                )
-                
-                q10_factor = Q10 ** ((tmean - T_REF) / 10.0)
-                gdd_day = max(0, tmean - GDD_BASE)
-                total_gdd += gdd_day
-                
-                # Accumulate daily effective k
-                eff_k_fast += K_FAST_BASE * q10_factor * gdd_day * moisture_factor
-                eff_k_slow += K_SLOW_BASE * q10_factor * gdd_day * moisture_factor
+            # Store daily factors as arrays
+            total_gdd = float(np.maximum(0, tmean_arr - GDD_BASE).sum())
+            q10_factors = Q10 ** ((tmean_arr - T_REF) / 10.0)       
+            gdd_days = np.maximum(0, tmean_arr - GDD_BASE)            
 
-            # Calculate Pool Fractions
+            # Compute moisture factor using field-average WHC for speed
+            avg_fc = float(np.mean(field_capacity_proxy))
+            moisture_track = float(np.mean(soil_moisture_mm))
+            daily_moisture_factors = []
+
+            for i in range(n_days):
+                moisture_track = np.clip(moisture_track + precip_arr[i] - et_arr[i], 1.0, avg_fc)
+                ratio = moisture_track / avg_fc
+                if ratio < 0.5:
+                    mf = ratio / 0.5
+                elif ratio > 1.2:
+                    mf = max(0.6, 1.2 / ratio)
+                else:
+                    mf = 1.0
+                daily_moisture_factors.append(mf)
+
+            daily_moisture_factors = np.array(daily_moisture_factors, dtype=np.float32)
+
+            # Single vectorized accumulation
+            eff_k_fast = float((K_FAST_BASE * q10_factors * gdd_days * daily_moisture_factors).sum())
+            eff_k_slow = float((K_SLOW_BASE * q10_factors * gdd_days * daily_moisture_factors).sum())
+
+            # Apply uniformly to soil arrays
             n_potential_total = om * 26.5
             n_fast_pool = n_potential_total * LABILE_FRACTION
             n_slow_pool = n_potential_total * RECALCITRANT_FRACTION
             clay_protection = np.clip(1.0 - (clay / 100.0 * CLAY_PROTECTION_COEFF), 0.45, 1.0)
 
-            # Final Mineralization amounts
             n_min_fast = n_fast_pool * (1.0 - np.exp(-eff_k_fast * topo_modifier))
             n_min_slow = n_slow_pool * clay_protection * (1.0 - np.exp(-eff_k_slow * topo_modifier))
             gross_n_min = n_min_fast + n_min_slow
@@ -448,7 +462,7 @@ def handle_mineralization(ack, respond, command):
     Thread(target=background_worker).start()
 
 # =========================================================
-# WEB SERVER & STARTUP (RENDER SURVIVAL HACK)
+# WEB SERVER & STARTUP
 # =========================================================
 
 dummy_app = Flask(__name__)
@@ -458,17 +472,12 @@ def home():
     return "Bot is running silently in the background!"
 
 if __name__ == "__main__":
-    # 1. Start the Slack Bot safely (Non-blocking)
-    if SLACK_APP_TOKEN and SLACK_BOT_TOKEN:
-        print("✅ Slack tokens found. Connecting bot...")
-        handler = SocketModeHandler(app, SLACK_APP_TOKEN)
-        # Use .connect() instead of .start() to avoid the thread crash!
-        handler.connect() 
+    if not SLACK_BOT_TOKEN or not SLACK_APP_TOKEN:
+        print("⚠️ Missing Slack tokens — check environment variables on Render")
     else:
-        print("⚠️ Missing Slack tokens. Bot cannot start.")
+        print("✅ Starting Slack bot in background thread...")
+        handler = SocketModeHandler(app, SLACK_APP_TOKEN)
+        Thread(target=handler.start, daemon=True).start()
+        print("✅ Slack bot connected")
 
-    # 2. Run the dummy server on the MAIN thread to prevent Render from killing the app
-    port = int(os.environ.get("PORT", 8080))
-    print(f"✅ Opening port {port} for Render...")
-    serve(dummy_app, host="0.0.0.0", port=port)
-
+    port = int(os.environ.
