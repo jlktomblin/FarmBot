@@ -460,7 +460,311 @@ def handle_mineralization(ack, respond, command):
             print(error_trace)
 
     Thread(target=background_worker).start()
+# =========================================================
+# GDD / CHU COMMAND
+# =========================================================
 
+@app.command("/gdd-chu")
+def handle_gdd_chu(ack, respond, command):
+    ack("🌱 Fetching weather data and calculating GDD & CHU...")
+
+    def background_worker():
+        try:
+            field_name = command['text'].strip()
+
+            if field_name not in PLANTING_DB:
+                respond(f"❌ Field `{field_name}` not recognized. Check spelling.")
+                return
+
+            planting_date_str = PLANTING_DB.get(field_name)
+            if not planting_date_str:
+                respond(f"⚠️ `{field_name}` has no planting date set in PLANTING_DB.")
+                return
+
+            station_info = FIELD_STATION_MAP.get(field_name)
+            if not station_info:
+                respond(f"❌ No weather station configured for `{field_name}`.")
+                return
+
+            station_id, station_name = station_info
+            planting_date = pd.to_datetime(planting_date_str)
+            current_date  = datetime.now()
+
+            # Fetch current and previous year in parallel
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                fut_curr = ex.submit(fetch_climate_data_cached, station_id, current_date.year)
+                fut_prev = ex.submit(fetch_climate_data_cached, station_id, current_date.year - 1)
+                df_curr = fut_curr.result()
+                df_prev = fut_prev.result()
+
+            if df_curr is None:
+                respond(f"❌ Could not fetch weather data from {station_name}.")
+                return
+
+            def compute_metrics(df_year, start_dt, end_dt):
+                if df_year is None or df_year.empty:
+                    return 0.0, 0.0
+                mask = (df_year['Date'] >= start_dt) & (df_year['Date'] <= end_dt)
+                sub  = df_year[mask]
+                if sub.empty:
+                    return 0.0, 0.0
+
+                # Vectorized GDD
+                gdd = float((sub['Tmean'] - GDD_BASE).clip(lower=0).sum())
+
+                # Vectorized CHU (OMAFRA formula)
+                tmax = sub['Tmax'].to_numpy(dtype=np.float32)
+                tmin = sub['Tmin'].to_numpy(dtype=np.float32)
+                tmax_clipped = np.minimum(tmax, 30.0)
+                ymax = np.where(tmax_clipped > 10.0,
+                                3.33 * (tmax_clipped - 10.0) - 0.084 * (tmax_clipped - 10.0)**2,
+                                0.0)
+                ymin = np.where(tmin > 4.44, 1.8 * (tmin - 4.44), 0.0)
+                chu  = float(np.maximum(0.0, (ymax + ymin) / 2.0).sum())
+
+                return round(gdd, 0), round(chu, 0)
+
+            # Current season from planting to today
+            gdd_c, chu_c = compute_metrics(df_curr, planting_date, current_date)
+
+            # Same period last year
+            prev_start = planting_date  - pd.DateOffset(years=1)
+            prev_end   = current_date   - pd.DateOffset(years=1)
+            gdd_p, chu_p = compute_metrics(df_prev, prev_start, prev_end)
+
+            # GDD trend chart
+            fig = Figure(figsize=(9, 4))
+            canvas = FigureCanvas(fig)
+            ax = fig.add_subplot(111)
+
+            df_plot = df_curr[
+                (df_curr['Date'] >= planting_date) &
+                (df_curr['Date'] <= current_date)
+            ].copy()
+
+            if not df_plot.empty:
+                df_plot['GDD_cum'] = (df_plot['Tmean'] - GDD_BASE).clip(lower=0).cumsum()
+                ax.plot(df_plot['Date'], df_plot['GDD_cum'],
+                        color='#4a9e6b', linewidth=2.5, label='Current Season')
+                ax.fill_between(df_plot['Date'], df_plot['GDD_cum'],
+                                alpha=0.15, color='#4a9e6b')
+
+            # Last year comparison line
+            if df_prev is not None:
+                df_prev_plot = df_prev[
+                    (df_prev['Date'] >= prev_start) &
+                    (df_prev['Date'] <= prev_end)
+                ].copy()
+                if not df_prev_plot.empty:
+                    df_prev_plot['GDD_cum'] = (df_prev_plot['Tmean'] - GDD_BASE).clip(lower=0).cumsum()
+                    # Shift dates forward 1 year so lines overlap on same x-axis
+                    df_prev_plot['Date_shifted'] = df_prev_plot['Date'] + pd.DateOffset(years=1)
+                    ax.plot(df_prev_plot['Date_shifted'], df_prev_plot['GDD_cum'],
+                            color='#aaaaaa', linewidth=1.5, linestyle='--', label='Last Season')
+
+            trend = 'ahead of' if gdd_c > gdd_p else 'behind'
+            diff  = abs(gdd_c - gdd_p)
+            ax.set_title(f"{field_name} — Cumulative GDD Since Planting ({planting_date_str})",
+                         fontsize=11, fontweight='bold')
+            ax.set_ylabel('Accumulated GDD (°C·days)')
+            ax.legend(fontsize=9)
+            ax.grid(True, linestyle=':', alpha=0.5)
+            fig.autofmt_xdate()
+            fig.tight_layout()
+
+            img_buf = io.BytesIO()
+            canvas.print_png(img_buf)
+            img_buf.seek(0)
+
+            # CHU maturity context
+            if chu_c < 2500:
+                chu_context = "Early hybrids only (<2500 CHU)"
+            elif chu_c < 2800:
+                chu_context = "Mid-season hybrids (2500–2800 CHU)"
+            elif chu_c < 3100:
+                chu_context = "Full season hybrids (2800–3100 CHU)"
+            else:
+                chu_context = "Long season potential (>3100 CHU)"
+
+            comment = (
+                f"🌱 *Field Weather Report — {field_name}*\n"
+                f"📅 Planted: {planting_date_str} | Station: {station_name}\n"
+                f"───────────────────────────────\n"
+                f"🌡️ *GDD (Base {GDD_BASE}°C):*\n"
+                f"  • This season: *{gdd_c:.0f} GDD*\n"
+                f"  • Last season (same period): {gdd_p:.0f} GDD\n"
+                f"  • Currently *{diff:.0f} GDD {trend} last year*\n\n"
+                f"🌽 *Corn Heat Units (OMAFRA):*\n"
+                f"  • This season: *{chu_c:.0f} CHU*\n"
+                f"  • Last season (same period): {chu_p:.0f} CHU\n"
+                f"  • Context: {chu_context}"
+            )
+
+            app.client.files_upload_v2(
+                channel=command['channel_id'],
+                initial_comment=comment,
+                file=img_buf.read(),
+                filename=f"{field_name}_gdd_chu.png"
+            )
+
+        except Exception as e:
+            respond(f"❌ Error: `{str(e)}`")
+            print(traceback.format_exc())
+
+    Thread(target=background_worker).start()
+
+
+# =========================================================
+# TRIAL ZONES COMMAND
+# =========================================================
+
+@app.command("/trial-zones")
+def handle_trial_zones(ack, respond, command):
+    ack("🚜 Generating management zones...")
+
+    def background_worker():
+        try:
+            args = command['text'].strip().split()
+            if not args:
+                respond("❌ Usage: `/trial-zones [FieldName] [NumberOfZones]`\n"
+                        "Example: `/trial-zones Wettlaufer 4`")
+                return
+
+            field_name = args[0]
+            n_zones    = int(args[1]) if len(args) > 1 else 4
+
+            if n_zones < 2 or n_zones > 6:
+                respond("⚠️ Number of zones must be between 2 and 6.")
+                return
+
+            df_soil = get_field_soil_data(field_name)
+            if df_soil is None or df_soil.empty:
+                respond(f"❌ No soil data found for `{field_name}`.")
+                return
+
+            SOIL_FEATURES = ['OM', 'Clay', 'Sand', 'pH', 'CEC']
+            available    = [f for f in SOIL_FEATURES if f in df_soil.columns]
+            if len(available) < 3:
+                respond(f"❌ Not enough soil columns for clustering. Found: {available}")
+                return
+
+            df_clean = df_soil.dropna(subset=available).copy()
+            if len(df_clean) < n_zones * 10:
+                respond(f"⚠️ Not enough clean data points ({len(df_clean)}) for {n_zones} zones.")
+                return
+
+            scaled = StandardScaler().fit_transform(df_clean[available])
+
+            kmeans = MiniBatchKMeans(
+                n_clusters=n_zones, random_state=42,
+                batch_size=10000, n_init=5
+            )
+            df_clean['Zone'] = kmeans.fit_predict(scaled) + 1
+
+            # Zone summary stats
+            zone_summary = df_clean.groupby('Zone')[available].mean().round(2)
+
+            # N rate prescription — zones ranked by OM (higher OM = lower N needed)
+            om_rank   = zone_summary['OM'].rank(ascending=False).astype(int)
+            base_rates = {1: 180, 2: 160, 3: 140, 4: 120, 5: 100, 6: 80}
+            zone_rates = {z: base_rates.get(r, 140) for z, r in om_rank.items()}
+            df_clean['N_Rate_kg_ha'] = df_clean['Zone'].map(zone_rates)
+
+            # Plot
+            colors = ['#e41a1c', '#377eb8', '#4daf4a', '#ff7f00', '#984ea3', '#a65628']
+            fig = Figure(figsize=(10, 8))
+            canvas = FigureCanvas(fig)
+            ax = fig.add_subplot(111)
+
+            for z in sorted(df_clean['Zone'].unique()):
+                sub_z = df_clean[df_clean['Zone'] == z]
+                rate  = zone_rates.get(z, 140)
+                ax.scatter(sub_z['Longitude'], sub_z['Latitude'],
+                           c=colors[(z-1) % len(colors)],
+                           label=f"Zone {z} — {rate} kg N/ha",
+                           s=4, alpha=0.7, linewidths=0)
+
+            ax.set_title(f"{field_name} — {n_zones} Management Zones\n"
+                         f"Clustered on: {', '.join(available)}",
+                         fontsize=12, fontweight='bold')
+            ax.set_xlabel("Longitude")
+            ax.set_ylabel("Latitude")
+            ax.legend(title="Zone — N Rate", fontsize=9, markerscale=3)
+            ax.grid(alpha=0.2)
+            fig.tight_layout()
+
+            img_buf = io.BytesIO()
+            canvas.print_png(img_buf)
+            img_buf.seek(0)
+
+            # Build zone summary text
+            zone_lines = []
+            for z in sorted(zone_summary.index):
+                om_val  = zone_summary.loc[z, 'OM'] if 'OM' in zone_summary.columns else 'N/A'
+                ph_val  = zone_summary.loc[z, 'pH'] if 'pH' in zone_summary.columns else 'N/A'
+                cec_val = zone_summary.loc[z, 'CEC'] if 'CEC' in zone_summary.columns else 'N/A'
+                rate    = zone_rates.get(z, 140)
+                count   = len(df_clean[df_clean['Zone'] == z])
+                zone_lines.append(
+                    f"  Zone {z}: OM={om_val}% | pH={ph_val} | CEC={cec_val} | "
+                    f"→ *{rate} kg N/ha* ({count:,} pts)"
+                )
+
+            comment = (
+                f"🎯 *Management Zones — {field_name}*\n"
+                f"Clustered {len(df_clean):,} soil points into {n_zones} zones "
+                f"using: {', '.join(available)}\n\n"
+                f"*Zone Summary:*\n" + "\n".join(zone_lines) + "\n\n"
+                f"_N rates based on OM ranking — higher OM zones receive lower N input_"
+            )
+
+            app.client.files_upload_v2(
+                channel=command['channel_id'],
+                initial_comment=comment,
+                file=img_buf.read(),
+                filename=f"{field_name}_zones.png"
+            )
+
+            # Also send a CSV prescription file
+            csv_buf = io.StringIO()
+            df_clean[['Latitude', 'Longitude', 'Zone', 'N_Rate_kg_ha']].to_csv(
+                csv_buf, index=False)
+            app.client.files_upload_v2(
+                channel=command['channel_id'],
+                content=csv_buf.getvalue(),
+                filename=f"{field_name}_prescription.csv",
+                initial_comment="📄 Prescription CSV ready for your application controller."
+            )
+
+        except Exception as e:
+            respond(f"❌ Error: `{str(e)}`")
+            print(traceback.format_exc())
+
+    Thread(target=background_worker).start()
+# =========================================================
+# HELP COMMAND
+# =========================================================
+
+@app.command("/ag-help")
+def handle_help(ack, respond, command):
+    ack()
+    respond(
+        "🌱 *Upside Agronomy Bot — Available Commands*\n"
+        "─────────────────────────────────────────\n"
+        "*/gdd-chu [FieldName]*\n"
+        "  Cumulative GDD & CHU since planting vs last year\n"
+        "  _Example: `/gdd-chu Wettlaufer`_\n\n"
+        "*/mineralization [FieldName]*\n"
+        "  Sub-field nitrogen mineralization map with terrain & moisture model\n"
+        "  _Example: `/mineralization Wettlaufer`_\n\n"
+        "*/trial-zones [FieldName] [Zones]*\n"
+        "  K-Means management zones with N rate prescription CSV\n"
+        "  _Example: `/trial-zones Wettlaufer 4`_\n\n"
+        "*/ag-help*\n"
+        "  Show this help message\n\n"
+        f"📋 *Fields with planting dates configured:* "
+        f"{sum(1 for v in PLANTING_DB.values() if v is not None)}/39"
+    )
 # =========================================================
 # WEB SERVER & STARTUP
 # =========================================================
