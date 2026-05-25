@@ -269,7 +269,7 @@ app = App(token=SLACK_BOT_TOKEN)
 
 @app.command("/mineralization")
 def handle_mineralization(ack, respond, command):
-    ack("🧠 Running advanced biophysical mineralization model...")
+    ack("🧠 Running advanced APSIM-style biophysical mineralization model...")
 
     def background_worker():
         try:
@@ -305,37 +305,6 @@ def handle_mineralization(ack, respond, command):
                 return
 
             # =====================================================
-            # SOIL ARRAYS
-            # =====================================================
-            om = df_soil['OM'].to_numpy(dtype=np.float32)
-            clay = df_soil['Clay'].to_numpy(dtype=np.float32)
-            sand = df_soil['Sand'].to_numpy(dtype=np.float32)
-            lon = df_soil['Longitude'].to_numpy(dtype=np.float32)
-            lat = df_soil['Latitude'].to_numpy(dtype=np.float32)
-
-            if 'PAWater' in df_soil.columns:
-                whc_mm = df_soil['PAWater'].fillna(0).to_numpy(dtype=np.float32) * 100.0
-            else:
-                whc_mm = np.clip(20.0 - (sand * 0.2) + (clay * 0.3) + (om * 3.0), 15.0, 80.0)
-
-            field_capacity_proxy = whc_mm * 2.5
-
-            # =====================================================
-            # TERRAIN MODIFIERS
-            # =====================================================
-            topo = TERRAIN_METRICS.get(field_name, {})
-            base_topo_modifier = topo.get('Mineralization_Topo_Modifier', 1.0)
-            drainage_class = topo.get('Drainage_Class', 'Unknown')
-
-            if 'TWI' in df_soil.columns:
-                twi = df_soil['TWI'].to_numpy(dtype=np.float32)
-                twi_z = (twi - np.mean(twi)) / (np.std(twi) + 1e-6)
-                wetness_index = 1.0 / (1.0 + np.exp(-twi_z))
-                topo_modifier = base_topo_modifier * wetness_index
-            else:
-                topo_modifier = np.full(len(df_soil), base_topo_modifier, dtype=np.float32)
-
-           # =====================================================
             # SCIENTIFICALLY IMPROVED N MINERALIZATION MODEL (APSIM-STYLE)
             # =====================================================
 
@@ -360,6 +329,8 @@ def handle_mineralization(ack, respond, command):
             om = df_soil['OM'].to_numpy(dtype=np.float32)
             clay = df_soil['Clay'].to_numpy(dtype=np.float32)
             sand = df_soil['Sand'].to_numpy(dtype=np.float32)
+            lon = df_soil['Longitude'].to_numpy(dtype=np.float32)
+            lat = df_soil['Latitude'].to_numpy(dtype=np.float32)
 
             # Pedotransfer approximation for bulk density (g/cm^3)
             bulk_density = 1.6 - (om * 0.03) - (clay * 0.002)
@@ -402,9 +373,7 @@ def handle_mineralization(ack, respond, command):
             # -----------------------------------------------------
             # FAST SPATIAL SIMULATION LOOP
             # -----------------------------------------------------
-            # This loops over days (~150), but executes array math across all 35,000 spatial points instantly
             for d in range(len(tmean)):
-
                 # Add precipitation and remove PET (converted from mm to Volumetric Fraction)
                 soil_water_vwc += (precip[d] / SOIL_DEPTH_MM)
                 soil_water_vwc -= (pet[d] / SOIL_DEPTH_MM)
@@ -455,29 +424,16 @@ def handle_mineralization(ack, respond, command):
 
                 daily_n_min += net_min
 
-            # Final seasonal available N mapped back to the Slack variables
+            # -----------------------------------------------------
+            # FINAL ADJUSTMENTS & IMMOBILIZATION
+            # -----------------------------------------------------
             net_n_min = np.clip(daily_n_min, 0.0, None)
-            mean_n = float(np.mean(net_n_min))
-            ci95 = 1.96 * (float(np.std(net_n_min)) / np.sqrt(len(net_n_min)))
-
-            # =====================================================
-            # LOSSES & IMMOBILIZATION
-            # =====================================================
-            denit_loss = np.where(
-                topo_modifier > DENITRIFICATION_WETNESS_THRESHOLD,
-                np.minimum(MAX_DENITRIFICATION_LOSS, (topo_modifier - 1.0) * 0.12),
-                0.0
-            )
-
-            net_n_min = gross_n_min * (1.0 - denit_loss)
 
             if 'Residue_C_N' in df_soil.columns:
                 residue_cn = df_soil['Residue_C_N'].fillna(20).to_numpy(dtype=np.float32)
                 immobilization_factor = np.where(residue_cn > IMMOBILIZATION_CARBON_RATIO, 0.82, 1.0)
                 net_n_min *= immobilization_factor
 
-            net_n_min = np.clip(net_n_min, 0.0, None)
-            
             mean_n = float(np.mean(net_n_min))
             ci95 = 1.96 * (float(np.std(net_n_min)) / np.sqrt(len(net_n_min)))
 
@@ -496,7 +452,7 @@ def handle_mineralization(ack, respond, command):
             cb = fig.colorbar(hb, ax=ax)
             cb.set_label('Available Mineralized N (kg N/ha)', fontsize=11)
             
-            ax.set_title(f"{field_name} — Terrain-Aware Nitrogen Mineralization", fontsize=15, fontweight='bold')
+            ax.set_title(f"{field_name} — APSIM-Style N Mineralization", fontsize=15, fontweight='bold')
             ax.set_xlabel("Longitude")
             ax.set_ylabel("Latitude")
             ax.grid(alpha=0.15)
@@ -507,11 +463,10 @@ def handle_mineralization(ack, respond, command):
             img_buf.seek(0)
 
             comment = (
-                f"🧠 *Advanced Mineralization Report — {field_name}*\n"
+                f"🧠 *Advanced APSIM-Style Report — {field_name}*\n"
                 f"• Estimated Available N: *{mean_n:.1f} ± {ci95:.1f} kg N/ha*\n"
                 f"• Heat Accumulation: *{total_gdd:.0f} GDD*\n"
-                f"• Terrain Class: *{drainage_class}*\n"
-                f"• Model Includes: Daily timestep kinetics, dynamic moisture balance, clay protection, Q10 scaling, and topographic wetness."
+                f"• Model Includes: Active/Slow/Passive pools, WFPS moisture curve, clay protection, and 1st-order decay."
             )
 
             app.client.files_upload_v2(
@@ -527,6 +482,7 @@ def handle_mineralization(ack, respond, command):
             print(error_trace)
 
     Thread(target=background_worker).start()
+    
 # =========================================================
 # GDD / CHU COMMAND
 # =========================================================
