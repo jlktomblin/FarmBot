@@ -335,53 +335,130 @@ def handle_mineralization(ack, respond, command):
             else:
                 topo_modifier = np.full(len(df_soil), base_topo_modifier, dtype=np.float32)
 
+           # =====================================================
+            # SCIENTIFICALLY IMPROVED N MINERALIZATION MODEL (APSIM-STYLE)
             # =====================================================
-            # HIGH-PERFORMANCE VECTORIZED KINETICS
-            # =====================================================
-            # Pre-compute soil temp adjusted means
-            tmean_arr = (sub_wx['Tmean'].to_numpy(dtype=np.float32) - 2.5)
-            precip_arr = sub_wx['Precip'].to_numpy(dtype=np.float32)
-            et_arr = np.maximum(0.5, tmean_arr * 0.18)
 
-            n_days = len(sub_wx)
-            soil_moisture_mm = field_capacity_proxy.copy()
+            # Organic matter pools
+            ACTIVE_POOL_FRAC = 0.05
+            SLOW_POOL_FRAC   = 0.45
+            PASSIVE_POOL_FRAC = 0.50
 
-            # Store daily factors as arrays
-            total_gdd = float(np.maximum(0, tmean_arr - GDD_BASE).sum())
-            q10_factors = Q10 ** ((tmean_arr - T_REF) / 10.0)       
-            gdd_days = np.maximum(0, tmean_arr - GDD_BASE)            
+            # Daily decay rates
+            K_ACTIVE = 0.08
+            K_SLOW   = 0.003
+            K_PASSIVE = 0.0001
 
-            # Compute moisture factor using field-average WHC for speed
-            avg_fc = float(np.mean(field_capacity_proxy))
-            moisture_track = float(np.mean(soil_moisture_mm))
-            daily_moisture_factors = []
+            Q10 = 2.0
+            T_REF = 20.0
+            SOIL_DEPTH_MM = 150.0  # Standard 6-inch sampling depth
+            SOIL_DEPTH_CM = 15.0
 
-            for i in range(n_days):
-                moisture_track = np.clip(moisture_track + precip_arr[i] - et_arr[i], 1.0, avg_fc)
-                ratio = moisture_track / avg_fc
-                if ratio < 0.5:
-                    mf = ratio / 0.5
-                elif ratio > 1.2:
-                    mf = max(0.6, 1.2 / ratio)
-                else:
-                    mf = 1.0
-                daily_moisture_factors.append(mf)
+            # -----------------------------------------------------
+            # SOIL INPUTS & MASS BALANCE
+            # -----------------------------------------------------
+            om = df_soil['OM'].to_numpy(dtype=np.float32)
+            clay = df_soil['Clay'].to_numpy(dtype=np.float32)
+            sand = df_soil['Sand'].to_numpy(dtype=np.float32)
 
-            daily_moisture_factors = np.array(daily_moisture_factors, dtype=np.float32)
+            # Pedotransfer approximation for bulk density (g/cm^3)
+            bulk_density = 1.6 - (om * 0.03) - (clay * 0.002)
+            bulk_density = np.clip(bulk_density, 1.0, 1.7)
+            
+            # Calculate total physical soil mass per hectare (kg/ha)
+            soil_mass_kg_ha = bulk_density * SOIL_DEPTH_CM * 100000.0
 
-            # Single vectorized accumulation
-            eff_k_fast = float((K_FAST_BASE * q10_factors * gdd_days * daily_moisture_factors).sum())
-            eff_k_slow = float((K_SLOW_BASE * q10_factors * gdd_days * daily_moisture_factors).sum())
+            # Estimate soil organic carbon (%) using Van Bemmelen factor
+            soc_pct = om * 0.58
+            # Approximate total organic nitrogen (%)
+            soil_n_pct = soc_pct / 12.0
 
-            # Apply uniformly to soil arrays
-            n_potential_total = om * 26.5
-            n_fast_pool = n_potential_total * LABILE_FRACTION
-            n_slow_pool = n_potential_total * RECALCITRANT_FRACTION
-            clay_protection = np.clip(1.0 - (clay / 100.0 * CLAY_PROTECTION_COEFF), 0.45, 1.0)
+            # Convert percentage to actual kg N/ha in the soil profile
+            total_n_kg_ha = soil_mass_kg_ha * (soil_n_pct / 100.0)
 
-            n_min_fast = n_fast_pool * (1.0 - np.exp(-eff_k_fast * topo_modifier))
-            n_min_slow = n_slow_pool * clay_protection * (1.0 - np.exp(-eff_k_slow * topo_modifier))
-            gross_n_min = n_min_fast + n_min_slow
+            # Partition physical N pools (kg N/ha)
+            n_active = total_n_kg_ha * ACTIVE_POOL_FRAC
+            n_slow   = total_n_kg_ha * SLOW_POOL_FRAC
+            n_passive = total_n_kg_ha * PASSIVE_POOL_FRAC
+
+            # -----------------------------------------------------
+            # WEATHER ARRAYS & WATER BALANCE
+            # -----------------------------------------------------
+            tmean = sub_wx['Tmean'].to_numpy(dtype=np.float32)
+            precip = sub_wx['Precip'].to_numpy(dtype=np.float32)
+
+            # Simplified PET estimate
+            pet = np.maximum(1.0, tmean * 0.22)
+
+            # Total Porosity (m3/m3) derived from bulk density
+            porosity = 1.0 - (bulk_density / 2.65)
+            
+            # Initialize soil water at 75% of porosity (Spring baseline)
+            soil_water_vwc = porosity * 0.75
+
+            daily_n_min = np.zeros(len(df_soil), dtype=np.float32)
+            total_gdd = float(np.maximum(0, tmean - GDD_BASE).sum())
+
+            # -----------------------------------------------------
+            # FAST SPATIAL SIMULATION LOOP
+            # -----------------------------------------------------
+            # This loops over days (~150), but executes array math across all 35,000 spatial points instantly
+            for d in range(len(tmean)):
+
+                # Add precipitation and remove PET (converted from mm to Volumetric Fraction)
+                soil_water_vwc += (precip[d] / SOIL_DEPTH_MM)
+                soil_water_vwc -= (pet[d] / SOIL_DEPTH_MM)
+
+                # Cap water between permanent wilting point and saturation (porosity)
+                soil_water_vwc = np.clip(soil_water_vwc, 0.05, porosity)
+
+                # Calculate Water-Filled Pore Space (WFPS)
+                wfps = soil_water_vwc / porosity
+                wfps = np.clip(wfps, 0.05, 1.0)
+
+                # Temperature scalar
+                temp_scalar = Q10 ** ((tmean[d] - T_REF) / 10.0)
+                temp_scalar = np.clip(temp_scalar, 0.1, 4.0)
+
+                # Moisture scalar (Bell curve peaking at 60% WFPS)
+                moisture_scalar = np.where(
+                    wfps < 0.6,
+                    wfps / 0.6,
+                    np.exp(-((wfps - 0.6) ** 2) / 0.08)
+                )
+                moisture_scalar = np.clip(moisture_scalar, 0.05, 1.0)
+
+                # Clay protection scalar
+                clay_scalar = 1.0 - (clay / 100.0 * 0.5)
+                clay_scalar = np.clip(clay_scalar, 0.4, 1.0)
+
+                # Combined Environmental Multiplier
+                env = temp_scalar * moisture_scalar * clay_scalar
+
+                # First-Order Pool Mineralization (kg N/ha)
+                active_min = n_active * K_ACTIVE * env
+                slow_min   = n_slow * K_SLOW * env
+                passive_min = n_passive * K_PASSIVE * env
+
+                gross_min = active_min + slow_min + passive_min
+
+                # Denitrification triggers sharply above 75% WFPS
+                denit = np.where(wfps > 0.75, (wfps - 0.75) * 0.4, 0.0)
+                denit = np.clip(denit, 0.0, 0.25)
+
+                net_min = gross_min * (1.0 - denit)
+
+                # Deplete pools (Mass balance tracking)
+                n_active -= active_min
+                n_slow -= slow_min
+                n_passive -= passive_min
+
+                daily_n_min += net_min
+
+            # Final seasonal available N mapped back to the Slack variables
+            net_n_min = np.clip(daily_n_min, 0.0, None)
+            mean_n = float(np.mean(net_n_min))
+            ci95 = 1.96 * (float(np.std(net_n_min)) / np.sqrt(len(net_n_min)))
 
             # =====================================================
             # LOSSES & IMMOBILIZATION
