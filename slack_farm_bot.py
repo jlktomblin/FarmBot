@@ -307,16 +307,15 @@ def handle_mineralization(ack, respond, command):
             # =====================================================
             # SCIENTIFICALLY IMPROVED N MINERALIZATION MODEL (APSIM-STYLE)
             # =====================================================
+            # Organic matter pools (Calibrated to true Soil Total N mass)
+            ACTIVE_POOL_FRAC = 0.015  # 1.5% of total N (Microbial biomass & fresh residue)
+            SLOW_POOL_FRAC   = 0.485  # 48.5% of total N (Humified particulate OM)
+            PASSIVE_POOL_FRAC = 0.50  # 50.0% of total N (Chemically protected)
 
-            # Organic matter pools
-            ACTIVE_POOL_FRAC = 0.05
-            SLOW_POOL_FRAC   = 0.45
-            PASSIVE_POOL_FRAC = 0.50
-
-            # Daily decay rates
-            K_ACTIVE = 0.08
-            K_SLOW   = 0.003
-            K_PASSIVE = 0.0001
+            # Daily decay rates (Calibrated for APSIM-style base mass)
+            K_ACTIVE = 0.015   # 1.5% turnover per day at optimal temp/moisture
+            K_SLOW   = 0.0004  # 0.04% turnover per day
+            K_PASSIVE = 0.00001 # Micro-bleed
 
             Q10 = 2.0
             T_REF = 20.0
