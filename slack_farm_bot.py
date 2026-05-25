@@ -480,4 +480,8 @@ if __name__ == "__main__":
         Thread(target=handler.start, daemon=True).start()
         print("✅ Slack bot connected")
 
-    port = int(os.environ.
+    port = int(os.environ.get("PORT", 8080))
+    print(f"✅ Starting web server on port {port}...")
+    
+    # Use Flask directly — no waitress dependency needed
+    dummy_app.run(host="0.0.0.0", port=port, use_reloader=False)
