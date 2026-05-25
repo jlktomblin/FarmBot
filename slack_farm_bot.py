@@ -40,7 +40,7 @@ SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
 
 CSV_FOLDER = "./soil_data"
 GDD_BASE = 5.0
-MAX_CACHE_SIZE = 20 # Prevents memory leaks in production
+MAX_CACHE_SIZE = 10 # Prevents memory leaks in production
 
 # =========================================================
 # SCIENTIFIC MODEL CONSTANTS
@@ -177,9 +177,9 @@ def convert_to_parquet(csv_path):
 
 csv_files = glob.glob(os.path.join(CSV_FOLDER, '*.csv'))
 if csv_files:
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        results = list(executor.map(convert_to_parquet, csv_files))
-    for mapped, pq in results:
+    print("⏳ Processing files sequentially to save memory...")
+    for f in csv_files:
+        mapped, pq = convert_to_parquet(f)
         FILE_MAP.setdefault(mapped, []).append(pq)
 
 print(f"✅ {len(FILE_MAP)} field datasets indexed")
