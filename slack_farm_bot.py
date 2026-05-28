@@ -131,21 +131,23 @@ FIELD_STATION_MAP = {
     # SARNIA / LAMBTON REGION
     # =====================================================
 
-    'Bercab 1': (48549, 'WALLACEBURG CDA'),
-    'Bercab 2': (48549, 'WALLACEBURG CDA'),
-    'Burm': (48549, 'WALLACEBURG CDA'),
-    'Sydenham 1': (48549, 'WALLACEBURG CDA'),
-    'Sydenham 2 North': (48549, 'WALLACEBURG CDA'),
-    'Sydenham 2 South': (48549, 'WALLACEBURG CDA'),
-    'Gerrits': (48549, 'WALLACEBURG CDA'),
-    'Kerrington': (48549, 'WALLACEBURG CDA'),
-    'McAlpine': (48549, 'WALLACEBURG CDA'),
+    'Bercab 1': (52118, 'CHATHAM KENT'),
+    'Bercab 2': (52118, 'CHATHAM KENT'),
+    'Burm': (52118, 'CHATHAM KENT'),
+    'Campbell': (52118, 'CHATHAM KENT'),
+    'Sydenham 1': (52118, 'CHATHAM KENT'),
+    'Sydenham 2 North': (52118, 'CHATHAM KENT'),
+    'Sydenham 2 South': (52118, 'CHATHAM KENT'),
+    'Gerrits': (48373, 'SARNIA'),
+    'Kerrington': (48373, 'SARNIA'),
+    'McAlpine': (52118, 'CHATHAM KENT'),
+    'Wecker': (52118, 'CHATHAM KENT'),
 
     # =====================================================
     # NORFOLK / DELHI REGION
     # =====================================================
 
-    'Campbell': (27528, 'DELHI CS'),
+
     'FieldAndFlock 1': (27528, 'DELHI CS'),
     'FieldAndFlock 2': (27528, 'DELHI CS'),
     'Moosberger 1': (27528, 'DELHI CS'),
@@ -203,11 +205,7 @@ FIELD_STATION_MAP = {
     'Schaus': (7844, 'MOUNT FOREST AUT'),
     'GerMar Farms (Grubb)': (7844, 'MOUNT FOREST AUT'),
 
-    # =====================================================
-    # WINDSOR / ESSEX
-    # =====================================================
 
-    'Wecker': (54738, 'WINDSOR A'),
 }
 
 # =========================================================
