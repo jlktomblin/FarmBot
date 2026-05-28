@@ -38,7 +38,7 @@ SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
 
 CSV_FOLDER = "./soil_data"
-GDD_BASE = 5.0
+GDD_BASE = 10.0
 MAX_CACHE_SIZE = 38 # Caches all fields (Monitor Render RAM usage!)
 
 # =========================================================
@@ -65,6 +65,10 @@ IMMOBILIZATION_CARBON_RATIO = 35
 # DATABASES
 # =========================================================
 
+# =========================================================
+# DATABASES
+# =========================================================
+
 PLANTING_DB = {
     'Benderbrook 1': '2026-05-07', 'Benderbrook 2': '2026-05-06', 'Brucelea': '2026-05-06',
     'Christie-2': '2026-05-17', 'Christie-1': '2026-05-18', 'Leis': '2026-05-17',
@@ -75,10 +79,12 @@ PLANTING_DB = {
     'Renwick 2': '2026-05-07', 'Renwick 1': '2026-05-08', 'Schaus': '2026-05-12',
     'Schumhaven': '2026-05-09', 'Triaro': '2026-05-12', 'Triple Lane Farms': '2026-05-11',
     'Veldale': '2026-05-12', 'Wecker': '2026-05-08', 'Wettlaufer': '2026-05-12',
-    'Campbell': '2026-05-06',
-    'Bercab 1': None, 'Bercab 2': None, 'Sydenham 1': None, 'Sydenham 2 North': None, 
-    'Sydenham 2 South': None, 'McAlpine': None, 'FieldAndFlock 2': None, 'Moosberger 1': None, 
-    'Clare Horst': None, 'Marvara / Judd': None, 'Biermans': None
+    'Campbell': '2026-05-15', 'Bercab 1': '2026-05-15', 'Bercab 2': '2026-05-17', 
+    'Sydenham 2 North': '2026-05-18', 'Sydenham 2 South': '2026-05-18', 'Clare Horst': '2026-05-21',
+    'Marvara / Judd': '2026-05-22', 'Biermans': '2026-05-22', 'FieldAndFlock 2': '2026-05-19',
+    
+    # Unplanted or fields without data
+    'Sydenham 1': None, 'McAlpine': None
 }
 
 FIELD_NAME_MAP = {
@@ -120,19 +126,87 @@ FIELD_NAME_MAP = {
 }
 
 FIELD_STATION_MAP = {
-    'Bercab 1': (48373, 'SARNIA'), 'Bercab 2': (48373, 'SARNIA'), 'Burm': (48373, 'SARNIA'),
-    'Sydenham 1': (48373, 'SARNIA'), 'Sydenham 2 North': (48373, 'SARNIA'), 'Sydenham 2 South': (48373, 'SARNIA'),
-    'Gerrits': (48373, 'SARNIA'), 'Kerrington': (48373, 'SARNIA'), 'McAlpine': (48373, 'SARNIA'),
-    'Campbell': (27528, 'DELHI CS'), 'FieldAndFlock 1': (27528, 'DELHI CS'), 'FieldAndFlock 2': (27528, 'DELHI CS'),
-    'Moosberger 1': (27528, 'DELHI CS'), 'Moosberger 2': (27528, 'DELHI CS'), 'JD Peters': (27528, 'DELHI CS'),
-    'Harrison Farms': (53378, 'BRANTFORD AIRPORT'), 'Veldale': (53378, 'BRANTFORD AIRPORT'), 'Triple Lane Farms': (53378, 'BRANTFORD AIRPORT'),
-    'Schumhaven': (10999, 'LONDON CS'), 'Leis': (10999, 'LONDON CS'), 'Gerber Acres': (10999, 'LONDON CS'),
-    'Benderbrook 1': (10999, 'LONDON CS'), 'Benderbrook 2': (10999, 'LONDON CS'),
-    'Clare Horst': (41983, 'ELORA RCS'), 'Marvara / Judd': (41983, 'ELORA RCS'), 'Klavan': (41983, 'ELORA RCS'), 'Triaro': (41983, 'ELORA RCS'),
-    'Wettlaufer': (27529, 'GODERICH CLIMATE'), 'Brucelea': (27529, 'GODERICH CLIMATE'),
-    'Renwick 2': (48569, 'WINGHAM AUTO'), 'Lang': (48568, 'CHESLEY CLIMATE'), 'Biermans': (48568, 'CHESLEY CLIMATE'),
-    'Christie-1': (48568, 'CHESLEY CLIMATE'), 'Christie-2': (48568, 'CHESLEY CLIMATE'), 'Highland': (48568, 'CHESLEY CLIMATE'),
-    'Renwick 1': (7844, 'MOUNT FOREST AUT'), 'Schaus': (7844, 'MOUNT FOREST AUT'), 'GerMar Farms (Grubb)': (7844, 'MOUNT FOREST AUT'),
+
+    # =====================================================
+    # SARNIA / LAMBTON REGION
+    # =====================================================
+
+    'Bercab 1': (48549, 'WALLACEBURG CDA'),
+    'Bercab 2': (48549, 'WALLACEBURG CDA'),
+    'Burm': (48549, 'WALLACEBURG CDA'),
+    'Sydenham 1': (48549, 'WALLACEBURG CDA'),
+    'Sydenham 2 North': (48549, 'WALLACEBURG CDA'),
+    'Sydenham 2 South': (48549, 'WALLACEBURG CDA'),
+    'Gerrits': (48549, 'WALLACEBURG CDA'),
+    'Kerrington': (48549, 'WALLACEBURG CDA'),
+    'McAlpine': (48549, 'WALLACEBURG CDA'),
+
+    # =====================================================
+    # NORFOLK / DELHI REGION
+    # =====================================================
+
+    'Campbell': (27528, 'DELHI CS'),
+    'FieldAndFlock 1': (27528, 'DELHI CS'),
+    'FieldAndFlock 2': (27528, 'DELHI CS'),
+    'Moosberger 1': (27528, 'DELHI CS'),
+    'Moosberger 2': (27528, 'DELHI CS'),
+    'JD Peters': (27528, 'DELHI CS'),
+
+    # =====================================================
+    # BRANT / BRANTFORD REGION
+    # =====================================================
+
+    'Harrison Farms': (48532, 'WOODSTOCK'),
+    'Veldale': (48532, 'WOODSTOCK'),
+    'Triple Lane Farms': (48532, 'WOODSTOCK'),
+
+
+    # =====================================================
+    # STRATFORD / WATERLOO-WELLINGTON
+    # =====================================================
+
+    'Schumhaven': (4823, 'STRATFORD AUTO'),
+    'Leis': (4823, 'STRATFORD AUTO'),
+    'Gerber Acres': (4823, 'STRATFORD AUTO'),
+    'Benderbrook 1': (4823, 'STRATFORD AUTO'),
+    'Benderbrook 2': (4823, 'STRATFORD AUTO'),
+
+    # =====================================================
+    # ELORA CLUSTER
+    # =====================================================
+
+    'Clare Horst': (41983, 'ELORA RCS'),
+    'Marvara / Judd': (41983, 'ELORA RCS'),
+    'Klavan': (41983, 'ELORA RCS'),
+    'Triaro': (41983, 'ELORA RCS'),
+}
+    # =====================================================
+    # LAKE HURON SHORELINE
+    # =====================================================
+
+    'Wettlaufer': (27529, 'GODERICH CLIMATE'),
+    'Brucelea': (27529, 'GODERICH CLIMATE'),
+
+    # =====================================================
+    # MIDWEST / WINGHAM / BRUCE
+    # =====================================================
+
+    'Renwick 2': (48569, 'WINGHAM AUTO'),
+
+    'Lang': (48568, 'CHESLEY CLIMATE'),
+    'Biermans': (48568, 'CHESLEY CLIMATE'),
+    'Christie-1': (48568, 'CHESLEY CLIMATE'),
+    'Christie-2': (48568, 'CHESLEY CLIMATE'),
+    'Highland': (48568, 'CHESLEY CLIMATE'),
+
+    'Renwick 1': (7844, 'MOUNT FOREST AUT'),
+    'Schaus': (7844, 'MOUNT FOREST AUT'),
+    'GerMar Farms (Grubb)': (7844, 'MOUNT FOREST AUT'),
+
+    # =====================================================
+    # WINDSOR / ESSEX
+    # =====================================================
+
     'Wecker': (54738, 'WINDSOR A'),
 }
 
@@ -483,12 +557,12 @@ def handle_mineralization(ack, respond, command):
     Thread(target=background_worker).start()
     
 # =========================================================
-# GDD / CHU COMMAND
+# GDD / CHU COMMAND (UPDATED WITH MODIFIED GDD)
 # =========================================================
 
 @app.command("/gdd-chu")
 def handle_gdd_chu(ack, respond, command):
-    ack("🌱 Fetching weather data and calculating GDD & CHU...")
+    ack("🌱 Fetching weather data and calculating Modified GDD & CHU...")
 
     def background_worker():
         try:
@@ -531,12 +605,15 @@ def handle_gdd_chu(ack, respond, command):
                 if sub.empty:
                     return 0.0, 0.0
 
-                # Vectorized GDD
-                gdd = float((sub['Tmean'] - GDD_BASE).clip(lower=0).sum())
-
-                # Vectorized CHU (OMAFRA formula)
                 tmax = sub['Tmax'].to_numpy(dtype=np.float32)
                 tmin = sub['Tmin'].to_numpy(dtype=np.float32)
+
+                # Vectorized Modified GDD (Cap at 30, Floor at 10 BEFORE averaging)
+                tmax_adj = np.clip(tmax, GDD_BASE, 30.0)
+                tmin_adj = np.clip(tmin, GDD_BASE, 30.0)
+                gdd = float((((tmax_adj + tmin_adj) / 2.0) - GDD_BASE).sum())
+
+                # Vectorized CHU (OMAFRA formula)
                 tmax_clipped = np.minimum(tmax, 30.0)
                 ymax = np.where(tmax_clipped > 10.0,
                                 3.33 * (tmax_clipped - 10.0) - 0.084 * (tmax_clipped - 10.0)**2,
@@ -565,7 +642,11 @@ def handle_gdd_chu(ack, respond, command):
             ].copy()
 
             if not df_plot.empty:
-                df_plot['GDD_cum'] = (df_plot['Tmean'] - GDD_BASE).clip(lower=0).cumsum()
+                # Vectorized cumulative plotting for Modified GDD
+                tmax_adj_plot = np.clip(df_plot['Tmax'], GDD_BASE, 30.0)
+                tmin_adj_plot = np.clip(df_plot['Tmin'], GDD_BASE, 30.0)
+                df_plot['GDD_cum'] = (((tmax_adj_plot + tmin_adj_plot) / 2.0) - GDD_BASE).cumsum()
+                
                 ax.plot(df_plot['Date'], df_plot['GDD_cum'],
                         color='#4a9e6b', linewidth=2.5, label='Current Season')
                 ax.fill_between(df_plot['Date'], df_plot['GDD_cum'],
@@ -578,7 +659,11 @@ def handle_gdd_chu(ack, respond, command):
                     (df_prev['Date'] <= prev_end)
                 ].copy()
                 if not df_prev_plot.empty:
-                    df_prev_plot['GDD_cum'] = (df_prev_plot['Tmean'] - GDD_BASE).clip(lower=0).cumsum()
+                    # Vectorized cumulative plotting for LY Modified GDD
+                    tmax_adj_prev = np.clip(df_prev_plot['Tmax'], GDD_BASE, 30.0)
+                    tmin_adj_prev = np.clip(df_prev_plot['Tmin'], GDD_BASE, 30.0)
+                    df_prev_plot['GDD_cum'] = (((tmax_adj_prev + tmin_adj_prev) / 2.0) - GDD_BASE).cumsum()
+                    
                     # Shift dates forward 1 year so lines overlap on same x-axis
                     df_prev_plot['Date_shifted'] = df_prev_plot['Date'] + pd.DateOffset(years=1)
                     ax.plot(df_prev_plot['Date_shifted'], df_prev_plot['GDD_cum'],
@@ -586,9 +671,9 @@ def handle_gdd_chu(ack, respond, command):
 
             trend = 'ahead of' if gdd_c > gdd_p else 'behind'
             diff  = abs(gdd_c - gdd_p)
-            ax.set_title(f"{field_name} — Cumulative GDD Since Planting ({planting_date_str})",
+            ax.set_title(f"{field_name} — Cumulative Modified GDD Since Planting ({planting_date_str})",
                          fontsize=11, fontweight='bold')
-            ax.set_ylabel('Accumulated GDD (°C·days)')
+            ax.set_ylabel(f'Accumulated GDD (Base {int(GDD_BASE)}°C)')
             ax.legend(fontsize=9)
             ax.grid(True, linestyle=':', alpha=0.5)
             fig.autofmt_xdate()
@@ -612,7 +697,7 @@ def handle_gdd_chu(ack, respond, command):
                 f"🌱 *Field Weather Report — {field_name}*\n"
                 f"📅 Planted: {planting_date_str} | Station: {station_name}\n"
                 f"───────────────────────────────\n"
-                f"🌡️ *GDD (Base {GDD_BASE}°C):*\n"
+                f"🌡️ *Modified GDD (Base {int(GDD_BASE)}°C, 30°C Cap):*\n"
                 f"  • This season: *{gdd_c:.0f} GDD*\n"
                 f"  • Last season (same period): {gdd_p:.0f} GDD\n"
                 f"  • Currently *{diff:.0f} GDD {trend} last year*\n\n"
@@ -634,8 +719,7 @@ def handle_gdd_chu(ack, respond, command):
             print(traceback.format_exc())
 
     Thread(target=background_worker).start()
-
-
+    
 # =========================================================
 # TRIAL ZONES COMMAND
 # =========================================================
