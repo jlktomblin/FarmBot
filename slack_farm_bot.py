@@ -162,14 +162,14 @@ FIELD_STATION_MAP = {
 
 
     # =====================================================
-    # STRATFORD / WATERLOO-WELLINGTON
+    # STRATFORD / WATERLOO
     # =====================================================
 
-    'Schumhaven': (4823, 'STRATFORD AUTO'),
-    'Leis': (4823, 'STRATFORD AUTO'),
-    'Gerber Acres': (4823, 'STRATFORD AUTO'),
-    'Benderbrook 1': (4823, 'STRATFORD AUTO'),
-    'Benderbrook 2': (4823, 'STRATFORD AUTO'),
+    'Schumhaven': (48569, 'KITCHENER/WATERLOO'),
+    'Leis': (48569, 'KITCHENER/WATERLOO'),
+    'Gerber Acres': (48569, 'KITCHENER/WATERLOO'),
+    'Benderbrook 1': (48569, 'KITCHENER/WATERLOO'),
+    'Benderbrook 2': (48569, 'KITCHENER/WATERLOO'),
 
     # =====================================================
     # ELORA CLUSTER
