@@ -179,7 +179,7 @@ FIELD_STATION_MAP = {
     'Marvara / Judd': (41983, 'ELORA RCS'),
     'Klavan': (41983, 'ELORA RCS'),
     'Triaro': (41983, 'ELORA RCS'),
-}
+
     # =====================================================
     # LAKE HURON SHORELINE
     # =====================================================
